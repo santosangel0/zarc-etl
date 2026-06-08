@@ -1,0 +1,27 @@
+# Data artifacts
+data/raw/
+data/interim/
+data/final/
+*.duckdb
+*.duckdb.wal
+
+# Env
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db

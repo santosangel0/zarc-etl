@@ -1,0 +1,6 @@
+[
+  {"id": 31, "sigla": "MG", "nome": "Minas Gerais", "regiao": {"id": 3, "sigla": "SE", "nome": "Sudeste"}},
+  {"id": 32, "sigla": "ES", "nome": "Espírito Santo", "regiao": {"id": 3, "sigla": "SE", "nome": "Sudeste"}},
+  {"id": 33, "sigla": "RJ", "nome": "Rio de Janeiro", "regiao": {"id": 3, "sigla": "SE", "nome": "Sudeste"}},
+  {"id": 35, "sigla": "SP", "nome": "São Paulo", "regiao": {"id": 3, "sigla": "SE", "nome": "Sudeste"}}
+]

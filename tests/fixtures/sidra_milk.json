@@ -1,0 +1,22 @@
+[
+  {
+    "id": "106",
+    "variavel": "Quantidade produzida",
+    "unidade": "Mil litros",
+    "resultados": [
+      {
+        "classificacoes": [{"id": "80", "nome": "Tipo de produto", "categoria": {"2682": "Leite"}}],
+        "series": [
+          {
+            "localidade": {"id": "31", "nivel": {"id": "N3", "nome": "Unidade da Federação"}, "nome": "Minas Gerais"},
+            "serie": {"2020": "9543210", "2021": "9612345", "2022": "-", "2023": ".."}
+          },
+          {
+            "localidade": {"id": "35", "nivel": {"id": "N3"}, "nome": "São Paulo"},
+            "serie": {"2020": "1700000", "2021": "1750000"}
+          }
+        ]
+      }
+    ]
+  }
+]

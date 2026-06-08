@@ -1,0 +1,17 @@
+.venv/
+data/
+.git/
+.github/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.env
+tests/
+docs/
+README.md
+*.duckdb
+*.duckdb.wal

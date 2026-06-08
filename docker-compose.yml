@@ -1,0 +1,14 @@
+services:
+  etl:
+    build: .
+    image: zarc-etl:latest
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/data
+      - ./tests:/app/tests:ro
+    # Exemplos:
+    #   docker compose run --rm etl inmet-stations
+    #   docker compose run --rm etl all
+    #   docker compose run --rm --entrypoint pytest etl -q
