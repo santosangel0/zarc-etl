@@ -83,9 +83,9 @@ _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 
 def normalize_colname(name: str) -> str:
-    """Latin-ASCII fold + lowercase + collapse non-alnum to '_'.
+    """Normalização Latin-ASCII + minúsculas + colapso de não-alfanum para '_'.
 
-    Mirrors `normalize_colnames()` in `tests/test_pipeline_inmet.R` and the
+    Espelha `normalize_colnames()` em `tests/test_pipeline_inmet.R` e no
     `qmd` (`stri_trans_general("Latin-ASCII")`).
     """
     decomposed = unicodedata.normalize("NFKD", name)

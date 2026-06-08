@@ -1,4 +1,4 @@
-"""Collectors for IBGE: Localidades v1, Malhas v3, Agregados (SIDRA) v3."""
+"""Coletores para IBGE: Localidades v1, Malhas v3, Agregados (SIDRA) v3."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def fetch_geojson(level: str, code: int | str) -> dict:
 
 
 def fetch_subdivisions(code: int | str, subdivision_level: str = "municipios") -> dict:
-    """Fetch child geometries of a parent. Mirrors `fetch_subdivisions()` in R."""
+    """Busca geometrias filhas de um pai. Espelha `fetch_subdivisions()` no R."""
     if subdivision_level not in VALID_MALHA_LEVELS:
         raise ValueError(f"Invalid subdivision_level {subdivision_level!r}")
     intra = INTRA_MAP[subdivision_level]
@@ -106,7 +106,7 @@ def fetch_milk_production_raw(
     codes: Iterable[int],
     years: Iterable[int],
 ) -> object:
-    """Hit IBGE Agregados (table 74, var 106, classif 80/2682)."""
+    """Consulta IBGE Agregados (tabela 74, var 106, classif 80/2682)."""
     if geo_level not in VALID_GEO_LEVELS:
         raise ValueError(f"Invalid geo_level {geo_level!r}; must be one of {VALID_GEO_LEVELS}")
     codes_str = ",".join(str(c) for c in codes)

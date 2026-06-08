@@ -1,4 +1,4 @@
-"""Transformer for NASA POWER point payloads."""
+"""Transformador para payloads de ponto NASA POWER."""
 
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ NA_SENTINEL = -999.0
 
 
 def parse_point(payload: dict) -> pl.DataFrame:
-    """Convert a NASA POWER payload into a tidy DataFrame.
+    """Converte um payload NASA POWER em um DataFrame organizado.
 
-    Schema: `date, lat, lon, t2m, rh2m, prectotcorr`. Sentinel -999 → null.
+    Schema: `date, lat, lon, t2m, rh2m, prectotcorr`. Sentinela -999 → null.
     """
     columns = {
         "date": pl.Date,

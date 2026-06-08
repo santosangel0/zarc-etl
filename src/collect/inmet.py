@@ -1,4 +1,4 @@
-"""Collectors for INMET data (live API + historical ZIPs)."""
+"""Coletores para dados INMET (API ao vivo + ZIPs históricos)."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _inmet_session() -> requests.Session:
 
 
 def fetch_stations() -> list[dict]:
-    """Hit /estacoes/T and return the raw JSON list. Mirrors `get_stations()`."""
+    """Consulta /estacoes/T e retorna a lista JSON bruta. Espelha `get_stations()`."""
     session = _inmet_session()
     resp = session.get(STATIONS_URL, timeout=60)
     resp.raise_for_status()
@@ -39,7 +39,7 @@ def fetch_stations() -> list[dict]:
 
 
 def fetch_daily(code: str, start: str, end: str, token: str) -> list[dict]:
-    """Hit the authenticated daily endpoint for one station/period."""
+    """Consulta o endpoint diário autenticado para uma estação/período."""
     if not token:
         raise ValueError("INMET_TOKEN is required for fetch_daily()")
     url = DAILY_URL_TMPL.format(start=start, end=end, code=code, token=token)
@@ -58,7 +58,7 @@ def fetch_daily(code: str, start: str, end: str, token: str) -> list[dict]:
 
 
 def download_history_zip(year: int, dest_dir: Path | None = None) -> Path:
-    """Download `{year}.zip` from the INMET historical portal. Skip if exists."""
+    """Download de `{year}.zip` do portal histórico INMET. Pula se já existir."""
     target_dir = dest_dir or raw_dir("inmet")
     target = target_dir / f"{year}.zip"
     if target.exists():
@@ -81,7 +81,7 @@ def download_history_zip(year: int, dest_dir: Path | None = None) -> Path:
 
 
 def extract_history_zip(zip_path: Path, target_dir: Path | None = None) -> list[Path]:
-    """Extract all CSV entries of an INMET yearly zip. Returns list of CSV paths."""
+    """Extrai todas as entradas CSV de um ZIP anual INMET. Retorna lista de caminhos."""
     year = zip_path.stem
     out_dir = target_dir or interim_dir(f"inmet/{year}")
     extracted: list[Path] = []

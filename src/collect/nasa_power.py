@@ -1,4 +1,4 @@
-"""Collector for NASA POWER daily/point endpoint."""
+"""Coletor para o endpoint NASA POWER daily/point."""
 
 from __future__ import annotations
 
@@ -23,9 +23,9 @@ def fetch_point(
     end: str,
     use_cache: bool = True,
 ) -> dict:
-    """Fetch daily T2M/RH2M/PRECTOTCORR for a single point.
+    """Busca T2M/RH2M/PRECTOTCORR diário para um ponto.
 
-    `start` / `end` accept ISO `YYYY-MM-DD`. Cache: `data/raw/nasa_power/`.
+    `start` / `end` aceitam ISO `YYYY-MM-DD`. Cache: `data/raw/nasa_power/`.
     """
     cache_path = raw_dir("nasa_power") / f"{lat}_{lon}_{start}_{end}.json"
     if use_cache and cache_path.exists():

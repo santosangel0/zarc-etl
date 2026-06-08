@@ -1,4 +1,4 @@
-"""Transformers for IBGE: localidades, malhas (WKB), milk production."""
+"""Transformadores para IBGE: localidades, malhas (WKB), produção leiteira."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def localidades_to_parquet(
     output_dir: Path | None = None,
     parent_field: str | None = None,
 ) -> Path:
-    """Write a localidades parquet for one nivel. Adds parent_id when found."""
+    """Escreve um parquet de localidades para um nível. Adiciona parent_id quando encontrado."""
     out_dir = output_dir or final_dir()
     if not rows:
         df = pl.DataFrame(schema={"id": pl.Int64, "nome": pl.Utf8})
@@ -51,7 +51,7 @@ def malhas_geojson_to_parquet(
     nivel: str,
     output_dir: Path | None = None,
 ) -> Path:
-    """Convert a GeoJSON FeatureCollection to a parquet with WKB geometry."""
+    """Converte uma FeatureCollection GeoJSON para parquet com geometria WKB."""
     out_dir = output_dir or final_dir()
     features = geojson.get("features", []) if isinstance(geojson, dict) else []
     rows: list[dict] = []
@@ -80,7 +80,7 @@ def malhas_geojson_to_parquet(
 
 
 def clean_sidra_value(raw: str | None) -> float | None:
-    """Replicate `clean_sidra_values()` (`-`→0, `..`/`...`/`X`→null)."""
+    """Replica `clean_sidra_values()` (`-`→0, `..`/`...`/`X`→null)."""
     if raw is None:
         return None
     s = str(raw).strip()
@@ -98,7 +98,7 @@ def clean_sidra_value(raw: str | None) -> float | None:
 
 
 def validate_api_request(n_categories: int, n_periods: int, n_locations: int) -> bool | str:
-    """100k limit from IBGE Agregados. Mirrors `validate_api_request()` in R."""
+    """Limite de 100k do IBGE Agregados. Espelha `validate_api_request()` no R."""
     total = n_categories * n_periods * n_locations
     if total <= 100_000:
         return True
@@ -110,11 +110,11 @@ def validate_api_request(n_categories: int, n_periods: int, n_locations: int) ->
 
 
 def parse_milk_production(payload: object, geo_level: str) -> pl.DataFrame:
-    """Convert SIDRA agregados response into a tidy DataFrame.
+    """Converte resposta dos agregados SIDRA em um DataFrame organizado.
 
-    Schema: `code, nome, year, milk_production_liters, geo_level`. Values are
-    converted from "mil litros" to litros (×1000), matching `inmet.R` consumer
-    expectations and `app/logic/ibge.R:373-376`.
+    Schema: `code, nome, year, milk_production_liters, geo_level`. Valores são
+    convertidos de "mil litros" para litros (×1000), igual ao esperado pelo
+    consumidor em `app/logic/ibge.R:373-376`.
     """
     columns = {
         "code": pl.Int64,

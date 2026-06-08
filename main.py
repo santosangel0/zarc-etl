@@ -1,4 +1,4 @@
-"""CLI entry point. Subcommands map 1:1 to pipeline steps in src/."""
+"""Ponto de entrada CLI. Subcomandos mapeiam 1:1 para passos do pipeline em src/."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def _parse_codes(spec: str) -> list[int]:
     return [int(x) for x in spec.split(",") if x.strip()]
 
 
-# ── INMET subcommands ────────────────────────────────────────────────────────
+# ── Subcomandos INMET ────────────────────────────────────────────────────────
 
 
 def cmd_inmet_stations(_args: argparse.Namespace) -> int:
@@ -91,7 +91,7 @@ def cmd_inmet_live(args: argparse.Namespace) -> int:
     return 0
 
 
-# ── IBGE subcommands ─────────────────────────────────────────────────────────
+# ── Subcomandos IBGE ──────────────────────────────────────────────────────────
 
 
 def cmd_ibge_localidades(_args: argparse.Namespace) -> int:
@@ -167,7 +167,7 @@ def cmd_nasa_power(args: argparse.Namespace) -> int:
     return 0
 
 
-# ── all ──────────────────────────────────────────────────────────────────────
+# ── all (tudo) ────────────────────────────────────────────────────────────────
 
 
 def cmd_all(args: argparse.Namespace) -> int:
@@ -188,47 +188,47 @@ def cmd_all(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="zarc-etl", description="zarc-etl pipeline")
+    p = argparse.ArgumentParser(prog="zarc-etl", description="Pipeline zarc-etl")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sp = sub.add_parser("inmet-stations", help="Fetch INMET stations to estacoes.parquet")
+    sp = sub.add_parser("inmet-stations", help="Busca estações INMET para estacoes.parquet")
     sp.set_defaults(func=cmd_inmet_stations)
 
-    sp = sub.add_parser("inmet-history", help="Download + parse INMET historical ZIPs")
-    sp.add_argument("--years", default="2000-2025", help="e.g. 2000-2025 or 2024")
+    sp = sub.add_parser("inmet-history", help="Download + parse dos ZIPs históricos INMET")
+    sp.add_argument("--years", default="2000-2025", help="ex: 2000-2025 ou 2024")
     sp.set_defaults(func=cmd_inmet_history)
 
-    sp = sub.add_parser("inmet-history-daily", help="Aggregate raw hourly history → daily QC + ITU")
+    sp = sub.add_parser("inmet-history-daily", help="Agrega histórico horário raw → diário com QC + ITU")
     sp.set_defaults(func=cmd_inmet_history_daily)
 
-    sp = sub.add_parser("inmet-live", help="Hit live INMET daily API for one station")
+    sp = sub.add_parser("inmet-live", help="Consulta API INMET diária ao vivo para uma estação")
     sp.add_argument("--code", required=True)
     sp.add_argument("--start", required=True)
     sp.add_argument("--end", required=True)
     sp.set_defaults(func=cmd_inmet_live)
 
-    sp = sub.add_parser("ibge-localidades", help="Fetch IBGE localidades for all levels")
+    sp = sub.add_parser("ibge-localidades", help="Busca localidades IBGE para todos os níveis")
     sp.set_defaults(func=cmd_ibge_localidades)
 
-    sp = sub.add_parser("ibge-malhas", help="Fetch IBGE Malhas geometry to parquet")
+    sp = sub.add_parser("ibge-malhas", help="Busca geometria IBGE Malhas para parquet")
     sp.add_argument("--level", required=True, choices=("regioes", "estados", "mesorregioes", "municipios"))
     sp.add_argument("--code", default=None, help="IBGE parent code (defaults to BR)")
     sp.set_defaults(func=cmd_ibge_malhas)
 
-    sp = sub.add_parser("ibge-milk", help="Fetch SIDRA milk production to parquet")
+    sp = sub.add_parser("ibge-milk", help="Busca produção leiteira SIDRA para parquet")
     sp.add_argument("--geo-level", default="N3", choices=("N1", "N2", "N3", "N6", "N8", "N9"))
     sp.add_argument("--codes", default="31", help="comma-separated IBGE codes")
     sp.add_argument("--years", default="2000-2023")
     sp.set_defaults(func=cmd_ibge_milk)
 
-    sp = sub.add_parser("nasa-power", help="Fetch NASA POWER daily/point")
+    sp = sub.add_parser("nasa-power", help="Busca NASA POWER diário/ponto")
     sp.add_argument("--lat", type=float, required=True)
     sp.add_argument("--lon", type=float, required=True)
     sp.add_argument("--start", required=True, help="YYYY-MM-DD")
     sp.add_argument("--end", required=True, help="YYYY-MM-DD")
     sp.set_defaults(func=cmd_nasa_power)
 
-    sp = sub.add_parser("all", help="Run the batch pipeline (no nasa-power, no inmet-live)")
+    sp = sub.add_parser("all", help="Executa o pipeline batch (sem nasa-power, sem inmet-live)")
     sp.add_argument("--history-years", default="2000-2025")
     sp.add_argument("--malha-levels", default="regioes,estados")
     sp.add_argument("--milk-geo-level", default="N3")

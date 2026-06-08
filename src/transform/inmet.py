@@ -1,4 +1,4 @@
-"""Transformers for INMET data: stations, raw hourly historic, daily QC + ITU."""
+"""Transformadores para dados INMET: estações, histórico horário raw, diário QC + ITU."""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ HEADER_RE = re.compile(r"^Data[;(]|^DATA \(", re.IGNORECASE)
 
 
 def stations_to_parquet(payload: list[dict], output_path: Path | None = None) -> Path:
-    """Build `estacoes.parquet` with WKB geometry (EPSG:4326).
+    """Constrói `estacoes.parquet` com geometria WKB (EPSG:4326).
 
-    Mirrors the cleanup in `app/logic/inmet.R:60-94`: drops rows with invalid
-    coords. Column names are normalized to snake_case via `normalize_colname`.
+    Espelha a limpeza em `app/logic/inmet.R:60-94`: remove linhas com coordenadas
+    inválidas. Nomes de colunas normalizados para snake_case via `normalize_colname`.
     """
     if not payload:
         raise ValueError("Empty stations payload")
@@ -54,7 +54,7 @@ def stations_to_parquet(payload: list[dict], output_path: Path | None = None) ->
 
 
 def _decode_inmet_csv(raw_bytes: bytes) -> str:
-    """latin1 → utf-8 with backslash-replace, identical strategy to the qmd."""
+    """latin1 → utf-8 com backslash-replace, estratégia idêntica ao qmd."""
     return raw_bytes.decode("latin-1", errors="backslashreplace")
 
 
@@ -66,16 +66,16 @@ def _detect_header_line(text: str) -> int | None:
 
 
 def parse_inmet_csv(csv_path: Path) -> pl.DataFrame | None:
-    """Parse one INMET hourly CSV. Returns None on parse failure.
+    """Faz parse de um CSV horario INMET. Retorna None em caso de falha.
 
-    Replicates `read_inmet_csv()` in `tests/test_pipeline_inmet.R:210-276`:
-    - Extract station code from filename via regex `[A-Z]\\d{3}`.
-    - Decode bytes as latin1.
-    - Detect header line by `^Data[;(]|^DATA \\(`.
-    - Parse with `;` separator, `,` decimal, NA = ['', 'NA', '-9999', '-9999,0'].
-    - Normalize column names; harmonize `data_yyyy_mm_dd` → `data`.
-    - Drop phantom columns (empty/numeric-only names, `unnamed_*`).
-    - Coerce all columns to Utf8 to tolerate schema drift across years.
+    Replica `read_inmet_csv()` em `tests/test_pipeline_inmet.R:210-276`:
+    - Extrai codigo da estacao do nome do arquivo via regex `[A-Z]\d{3}`.
+    - Decodifica bytes como latin1.
+    - Detecta linha de cabecalho por `^Data[;(]|^DATA \(`.
+    - Parse com separador `;`, decimal `,`, NA = ['', 'NA', '-9999', '-9999,0'].
+    - Normaliza nomes de colunas; harmoniza `data_yyyy_mm_dd` -> `data`.
+    - Remove colunas fantasmas (nomes vazios/so numericos, `unnamed_*`).
+    - Forca todas as colunas para Utf8 para tolerar drift de schema entre anos.
     """
     name = csv_path.name
     match = STATION_FILENAME_RE.search(name)
@@ -144,11 +144,11 @@ def ingest_history_to_duckdb(
     db_path: Path | None = None,
     station_lookup: set[str] | None = None,
 ) -> int:
-    """Append parsed CSVs into `tabela_clima` in a persistent DuckDB.
+    """Acrescenta CSVs parseados na `tabela_clima` em um DuckDB persistente.
 
-    Strategy mirrors qmd §6: persistent on-disk DB, INSERT BY NAME so columns
-    can drift across years, all values stored as VARCHAR (DuckDB casts on read).
-    Returns total inserted row count.
+    Estratégia espelha qmd §6: DB persistente em disco, INSERT BY NAME para colunas
+    poderem variar entre anos, todos os valores armazenados como VARCHAR (DuckDB
+    faz cast na leitura). Retorna total de linhas inseridas.
     """
     target_db = db_path or (interim_dir() / "inmet_temp.duckdb")
     con = duckdb.connect(str(target_db))
@@ -200,7 +200,7 @@ def export_history_parquet(
     output_path: Path | None = None,
     cleanup_db: bool = True,
 ) -> Path:
-    """COPY tabela_clima → parquet (ZSTD) sorted by (cd_estacao, data)."""
+    """COPY tabela_clima → parquet (ZSTD) ordenado por (cd_estacao, data)."""
     target_db = db_path or (interim_dir() / "inmet_temp.duckdb")
     out = output_path or (final_dir() / "inmet_historico.parquet")
     if out.exists():
@@ -233,25 +233,25 @@ def export_history_parquet(
 
 
 def compute_itu(temp: pl.Expr, humidity: pl.Expr) -> pl.Expr:
-    """ITU = 0.8*T + (RH*(T-14.3))/100 + 46.3 (mirrors `inmet.R:272-284`)."""
+    """ITU = 0.8*T + (RH*(T-14.3))/100 + 46.3 (espelha `inmet.R:272-284`)."""
     return 0.8 * temp + (humidity * (temp - 14.3)) / 100 + 46.3
 
 
 def qc_temperature(expr: pl.Expr) -> pl.Expr:
-    """Mask values outside [-10, 50] °C as null."""
+    """Mascara valores fora de [-10, 50] °C como null."""
     return pl.when((expr < -10) | (expr > 50)).then(None).otherwise(expr)
 
 
 def qc_humidity(expr: pl.Expr) -> pl.Expr:
-    """Mask values outside [0, 100] % as null."""
+    """Mascara valores fora de [0, 100] % como null."""
     return pl.when((expr < 0) | (expr > 100)).then(None).otherwise(expr)
 
 
 def daily_from_live_payload(payload: list[dict], station_code: str) -> pl.DataFrame:
-    """Build the daily DataFrame from the live INMET API payload.
+    """Constrói o DataFrame diário a partir do payload da API INMET ao vivo.
 
-    Mirrors `fetch_climate_data()` in `app/logic/inmet.R:160-287`: build the
-    frame with QC ranges and ITU columns. Returns empty frame if payload empty.
+    Espelha `fetch_climate_data()` em `app/logic/inmet.R:160-287`: constrói o
+    frame com faixas QC e colunas ITU. Retorna frame vazio se payload vazio.
     """
     columns = ["date", "station_code", "temp_med", "temp_max", "umid_med", "umid_min", "itu_med", "itu_max"]
     if not payload:
@@ -291,7 +291,7 @@ def daily_from_history_parquet(
     temp_col: str = "temperatura_do_ar_bulbo_seco_horaria_c",
     rh_col: str = "umidade_relativa_do_ar_horaria",
 ) -> Path:
-    """Aggregate raw hourly historic parquet to daily QC + ITU."""
+    """Agrega parquet histórico horário raw para diário com QC + ITU."""
     src = history_path or (final_dir() / "inmet_historico.parquet")
     out = output_path or (final_dir() / "inmet_historico_diario.parquet")
 
