@@ -8,6 +8,7 @@ services:
     volumes:
       - ./data:/data
       - ./tests:/app/tests:ro
+      - ./scripts:/app/scripts:ro
     # Exemplos:
     #   docker compose run --rm etl inmet-stations
     #   docker compose run --rm etl all
