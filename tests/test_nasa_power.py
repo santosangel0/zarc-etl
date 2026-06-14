@@ -54,3 +54,38 @@ def test_write_parquet(tmp_data_dir: Path, fixtures_dir: Path) -> None:
     assert out.exists()
     rt = pl.read_parquet(out)
     assert rt.height == 3
+
+
+# ── Horário ──────────────────────────────────────────────────────────────────
+
+
+def test_parse_point_hourly(fixtures_dir: Path) -> None:
+    payload = json.loads((fixtures_dir / "nasa_power_hourly_jf.json").read_text())
+    df = t_np.parse_point_hourly(payload, cd_estacao="A001")
+    assert df.height == 3
+    # chaves de join com o INMET: (cd_estacao, data, hora int 0..23)
+    assert df["cd_estacao"][0] == "A001"
+    assert df["data"][0] == "2024-01-01"
+    assert df["hora"].to_list() == [0, 1, 2]
+    assert df["lat"][0] == -21.7
+    assert df["lon"][0] == -43.4
+    # parâmetros viram colunas minúsculas; sentinela -999 → null
+    row2 = df.filter(pl.col("hora") == 2)
+    assert row2["t2m"].item() is None
+    assert row2["rh2m"].item() == 94.08
+
+
+def test_parse_point_hourly_empty() -> None:
+    df = t_np.parse_point_hourly({})
+    assert df.height == 0
+    assert set(df.columns) == {"cd_estacao", "datetime", "data", "hora", "lat", "lon"}
+
+
+def test_write_hourly_parquet(tmp_data_dir: Path, fixtures_dir: Path) -> None:
+    payload = json.loads((fixtures_dir / "nasa_power_hourly_jf.json").read_text())
+    df = t_np.parse_point_hourly(payload, cd_estacao="A001")
+    out = t_np.write_hourly_parquet(df)
+    assert out.name == "nasa_power_hourly.parquet"
+    rt = pl.read_parquet(out)
+    assert rt.height == 3
+    assert rt["hora"].to_list() == [0, 1, 2]

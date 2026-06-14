@@ -90,8 +90,25 @@ CONTRACTS: dict[str, dict] = {
         "allow_extra": False,
         "sort": ["geo_level", "year", "code"],
     },
+    "nasa_power_hourly": {
+        # consolidado por estação (nasa_power_hourly) ou ad-hoc por ponto
+        # (nasa_power_hourly_<lat>_<lon>_...). cd_estacao fica null no modo ponto.
+        "match": lambda n: n.startswith("nasa_power_hourly"),
+        "cols": {
+            "cd_estacao": pl.Utf8,
+            "data": pl.Utf8,
+            "hora": pl.Int64,
+            "lat": pl.Float64,
+            "lon": pl.Float64,
+            "t2m": pl.Float64,
+            "rh2m": pl.Float64,
+        },
+        "allow_extra": True,  # datetime + parâmetros POWER adicionais
+        "sort": ["cd_estacao", "data", "hora"],
+    },
     "nasa_power": {
-        "match": lambda n: n.startswith("nasa_power_"),
+        # diário; exclui o prefixo horário acima
+        "match": lambda n: n.startswith("nasa_power_") and not n.startswith("nasa_power_hourly"),
         "cols": {
             "date": pl.Date,
             "lat": pl.Float64,
