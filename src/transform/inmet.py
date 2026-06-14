@@ -66,7 +66,7 @@ def _detect_header_line(text: str) -> int | None:
 
 
 def parse_inmet_csv(csv_path: Path) -> pl.DataFrame | None:
-    """Faz parse de um CSV horario INMET. Retorna None em caso de falha.
+    r"""Faz parse de um CSV horario INMET. Retorna None em caso de falha.
 
     Replica `read_inmet_csv()` em `tests/test_pipeline_inmet.R:210-276`:
     - Extrai codigo da estacao do nome do arquivo via regex `[A-Z]\d{3}`.
