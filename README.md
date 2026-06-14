@@ -29,9 +29,13 @@ docker compose run --rm etl ibge-localidades
 docker compose run --rm etl ibge-malhas --level estados
 docker compose run --rm etl ibge-milk --geo-level N3 --codes 31 --years 2000-2023
 
-# NASA POWER (sem token)
+# NASA POWER diário (sem token)
 docker compose run --rm etl nasa-power --lat -21.7 --lon -43.4 \
   --start 2024-01-01 --end 2024-12-31
+
+# NASA POWER horário (T2M/RH2M) p/ imputar buracos do INMET → nasa_power_hourly.parquet
+docker compose run --rm etl nasa-power-hourly --codes A422,A360 --years 2024-2024
+docker compose run --rm etl nasa-power-hourly --all-stations --years 2001-2025  # pesado
 
 # Tudo
 docker compose run --rm etl all

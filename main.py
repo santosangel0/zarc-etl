@@ -26,6 +26,19 @@ def _parse_codes(spec: str) -> list[int]:
     return [int(x) for x in spec.split(",") if x.strip()]
 
 
+def _chunk_year_range(years: list[int], size: int) -> list[tuple[str, str]]:
+    """Quebra um range de anos em pedaços ISO (start, end) de até `size` anos.
+
+    O endpoint horário JSON do NASA POWER recusa extensões acima de ~17 anos
+    (HTTP 422, "shorten your requested time extent"), então puxamos em blocos.
+    """
+    chunks: list[tuple[str, str]] = []
+    for i in range(0, len(years), size):
+        block = years[i : i + size]
+        chunks.append((f"{block[0]}-01-01", f"{block[-1]}-12-31"))
+    return chunks
+
+
 # ── Subcomandos INMET ────────────────────────────────────────────────────────
 
 
@@ -88,6 +101,42 @@ def cmd_inmet_live(args: argparse.Namespace) -> int:
     payload = fetch_daily(args.code, args.start, args.end, token)
     df = daily_from_live_payload(payload, args.code)
     print(df)
+    return 0
+
+
+def cmd_inmet_impute(args: argparse.Namespace) -> int:
+    """Imputa lacunas horárias do INMET com NASA POWER (corrigido) → diário + relatório."""
+    import polars as pl
+
+    from src.transform.impute import (
+        coverage_summary,
+        format_report,
+        impute_daily,
+        validate,
+    )
+    from src.utils import final_dir
+
+    if args.all_stations:
+        est = pl.read_parquet(final_dir() / "estacoes.parquet", columns=["cd_estacao"])
+        codes = est["cd_estacao"].drop_nulls().unique().to_list()
+    else:
+        codes = [c.strip() for c in (args.codes or "").split(",") if c.strip()]
+    if not codes:
+        print("informe --codes A001,A101 ou --all-stations", file=sys.stderr)
+        return 2
+
+    test_years = _parse_year_range(args.test_years)
+    log.info("imputação: %d estações, método=%s, hold-out=%s", len(codes), args.method, test_years)
+
+    val = validate(codes, test_years, args.method)
+    _out, daily = impute_daily(codes, method=args.method)
+    cov = coverage_summary(daily)
+    report = format_report(val, cov, codes)
+
+    report_path = final_dir() / args.report
+    report_path.write_text(report)
+    log.info("relatório escrito em %s", report_path)
+    print(report)
     return 0
 
 
@@ -167,6 +216,80 @@ def cmd_nasa_power(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_nasa_power_hourly(args: argparse.Namespace) -> int:
+    """Série HORÁRIA do NASA POWER (T2M/RH2M…) para imputar buracos do INMET.
+
+    Dois modos:
+      • ponto único  : `--lat --lon --start --end` → parquet ad-hoc por ponto.
+      • por estações : `--codes A001,A002` ou `--all-stations` (+ `--years`) →
+        lê estacoes.parquet, puxa a série de cada estação e consolida em
+        `nasa_power_hourly.parquet`, com cd_estacao/data/hora_utc para join
+        direto com `inmet_historico`.
+    """
+    import time
+
+    import polars as pl
+
+    from src.collect.nasa_power import fetch_point_hourly
+    from src.transform.nasa_power import (
+        parse_point_hourly,
+        write_hourly_parquet,
+    )
+    from src.utils import final_dir
+
+    parameters = tuple(p.strip().upper() for p in args.parameters.split(",") if p.strip())
+
+    # ── Modo ponto único: pull ad-hoc, não toca o parquet consolidado. ──────────
+    if args.lat is not None and args.lon is not None:
+        payload = fetch_point_hourly(args.lat, args.lon, args.start, args.end, parameters)
+        df = parse_point_hourly(payload)
+        out = (
+            final_dir()
+            / f"nasa_power_hourly_{args.lat}_{args.lon}_{args.start}_{args.end}.parquet"
+        )
+        df.write_parquet(out, compression="zstd", compression_level=3, row_group_size=100_000)
+        log.info("wrote %s rows=%d", out, df.height)
+        return 0
+
+    # ── Modo por estações: coordenadas vêm de estacoes.parquet. ─────────────────
+    estacoes_path = final_dir() / "estacoes.parquet"
+    if not estacoes_path.exists():
+        print("estacoes.parquet ausente — rode `inmet-stations` primeiro", file=sys.stderr)
+        return 2
+
+    est = pl.read_parquet(
+        estacoes_path, columns=["cd_estacao", "vl_latitude", "vl_longitude"]
+    ).drop_nulls()
+
+    if not args.all_stations:
+        codes = {c.strip() for c in (args.codes or "").split(",") if c.strip()}
+        if not codes:
+            print("informe --codes A001,A002 ou --all-stations", file=sys.stderr)
+            return 2
+        est = est.filter(pl.col("cd_estacao").is_in(list(codes)))
+
+    if est.height == 0:
+        print("nenhuma estação selecionada", file=sys.stderr)
+        return 2
+
+    years = _parse_year_range(args.years)
+    chunks = _chunk_year_range(years, args.chunk_years)
+
+    frames: list[pl.DataFrame] = []
+    total = est.height
+    for i, row in enumerate(est.iter_rows(named=True), start=1):
+        code, lat, lon = row["cd_estacao"], row["vl_latitude"], row["vl_longitude"]
+        log.info("[%d/%d] nasa-power-hourly %s (%.4f, %.4f)", i, total, code, lat, lon)
+        for c_start, c_end in chunks:
+            payload = fetch_point_hourly(lat, lon, c_start, c_end, parameters)
+            frames.append(parse_point_hourly(payload, cd_estacao=code))
+            time.sleep(args.sleep)
+
+    df = pl.concat(frames, how="vertical_relaxed") if frames else pl.DataFrame()
+    write_hourly_parquet(df)
+    return 0
+
+
 # ── all (tudo) ────────────────────────────────────────────────────────────────
 
 
@@ -207,6 +330,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--end", required=True)
     sp.set_defaults(func=cmd_inmet_live)
 
+    sp = sub.add_parser("inmet-impute", help="Imputa buracos horários do INMET com NASA POWER (corrigido) → diário")
+    sp.add_argument("--codes", default=None, help="códigos INMET ex: A001,A101")
+    sp.add_argument("--all-stations", action="store_true", help="todas as estações de estacoes.parquet")
+    sp.add_argument("--method", default="scaling", choices=("scaling", "linear"), help="correção de viés")
+    sp.add_argument("--test-years", default="2022-2024", help="anos de hold-out p/ validação")
+    sp.add_argument("--report", default="impute_report.md", help="nome do relatório em data/final/")
+    sp.set_defaults(func=cmd_inmet_impute)
+
     sp = sub.add_parser("ibge-localidades", help="Busca localidades IBGE para todos os níveis")
     sp.set_defaults(func=cmd_ibge_localidades)
 
@@ -227,6 +358,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--start", required=True, help="YYYY-MM-DD")
     sp.add_argument("--end", required=True, help="YYYY-MM-DD")
     sp.set_defaults(func=cmd_nasa_power)
+
+    sp = sub.add_parser(
+        "nasa-power-hourly",
+        help="NASA POWER horário (T2M/RH2M) p/ imputação — ponto único ou por estações",
+    )
+    sp.add_argument("--lat", type=float, default=None, help="ponto único (com --lon/--start/--end)")
+    sp.add_argument("--lon", type=float, default=None)
+    sp.add_argument("--start", default=None, help="YYYY-MM-DD (modo ponto único)")
+    sp.add_argument("--end", default=None, help="YYYY-MM-DD (modo ponto único)")
+    sp.add_argument("--codes", default=None, help="códigos INMET ex: A001,A521 (modo estações)")
+    sp.add_argument("--all-stations", action="store_true", help="todas as estações de estacoes.parquet")
+    sp.add_argument("--years", default="2001-2025", help="range de anos (modo estações)")
+    sp.add_argument("--chunk-years", type=int, default=10, help="anos por request (limite JSON ~17)")
+    sp.add_argument("--parameters", default="T2M,RH2M", help="parâmetros POWER, vírgula-separados")
+    sp.add_argument("--sleep", type=float, default=0.5, help="pausa entre requests (s)")
+    sp.set_defaults(func=cmd_nasa_power_hourly)
 
     sp = sub.add_parser("all", help="Executa o pipeline batch (sem nasa-power, sem inmet-live)")
     sp.add_argument("--history-years", default="2000-2025")
