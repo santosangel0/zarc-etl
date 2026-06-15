@@ -106,32 +106,63 @@ def cmd_inmet_live(args: argparse.Namespace) -> int:
 
 def cmd_inmet_impute(args: argparse.Namespace) -> int:
     """Imputa lacunas horárias do INMET com NASA POWER (corrigido) → diário + relatório."""
-    import polars as pl
-
     from src.transform.impute import (
         coverage_summary,
         format_report,
+        impute_all,
         impute_daily,
+        sample_codes,
         validate,
+        validate_sample,
     )
     from src.utils import final_dir
 
+    test_years = _parse_year_range(args.test_years)
+    yrs = _parse_year_range(args.years)
+    years = (yrs[0], yrs[-1])
+
     if args.all_stations:
-        est = pl.read_parquet(final_dir() / "estacoes.parquet", columns=["cd_estacao"])
-        codes = est["cd_estacao"].drop_nulls().unique().to_list()
+        # Escala completa: imputa em lotes (RAM-safe, retomável); valida numa amostra.
+        log.info("imputação ALL-STATIONS: método=%s, anos=%s, lote=%d", args.method, years, args.batch_size)
+        from src.transform.impute import station_coords
+
+        _out, daily = impute_all(method=args.method, years=years, batch_size=args.batch_size)
+        all_codes = daily["cd_estacao"].unique().sort().to_list()
+        want = set(station_coords()["cd_estacao"].to_list())
+        excluded = sorted(want - set(all_codes))  # sem dado observável no período
+        sample = sample_codes(all_codes, args.sample)
+        log.info("validando amostra de %d estações: %s", len(sample), sample)
+        val = validate_sample(sample, test_years, args.method, years=years)
+        cov = coverage_summary(daily)
+        report = format_report(val, cov, sample)
+        completeness = (
+            f"\n## Completude\n\n- Estações com dados imputados: **{len(all_codes)}/{len(want)}**."
+            + (
+                ""
+                if not excluded
+                else f"\n- {len(excluded)} excluídas por não terem dados INMET no período "
+                f"(estações que começaram a operar depois): {excluded}"
+            )
+        )
+        report += completeness
     else:
         codes = [c.strip() for c in (args.codes or "").split(",") if c.strip()]
-    if not codes:
-        print("informe --codes A001,A101 ou --all-stations", file=sys.stderr)
-        return 2
+        if not codes:
+            print("informe --codes A001,A101 ou --all-stations", file=sys.stderr)
+            return 2
+        log.info("imputação: %d estações, método=%s, hold-out=%s", len(codes), args.method, test_years)
+        val = validate(codes, test_years, args.method)
+        _out, daily = impute_daily(codes, method=args.method)
+        cov = coverage_summary(daily)
+        report = format_report(val, cov, codes)
 
-    test_years = _parse_year_range(args.test_years)
-    log.info("imputação: %d estações, método=%s, hold-out=%s", len(codes), args.method, test_years)
-
-    val = validate(codes, test_years, args.method)
-    _out, daily = impute_daily(codes, method=args.method)
-    cov = coverage_summary(daily)
-    report = format_report(val, cov, codes)
+    # Composição por tipo (observado / gap-fill / backfill pré-existência).
+    total = daily.height
+    tipo = daily.group_by("tipo").len().sort("len", descending=True)
+    comp = "\n## Composição por tipo\n\n| tipo | dias-estação | % |\n|---|---|---|\n"
+    for r in tipo.iter_rows(named=True):
+        comp += f"| {r['tipo']} | {r['len']:,} | {r['len'] / total * 100:.1f}% |\n"
+    report += comp
 
     report_path = final_dir() / args.report
     report_path.write_text(report)
@@ -332,9 +363,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("inmet-impute", help="Imputa buracos horários do INMET com NASA POWER (corrigido) → diário")
     sp.add_argument("--codes", default=None, help="códigos INMET ex: A001,A101")
-    sp.add_argument("--all-stations", action="store_true", help="todas as estações de estacoes.parquet")
+    sp.add_argument("--all-stations", action="store_true", help="todas as estações (em lotes, retomável)")
     sp.add_argument("--method", default="scaling", choices=("scaling", "linear"), help="correção de viés")
+    sp.add_argument("--years", default="2001-2024", help="período a imputar (NASA horário começa em 2001)")
     sp.add_argument("--test-years", default="2022-2024", help="anos de hold-out p/ validação")
+    sp.add_argument("--batch-size", type=int, default=20, help="estações por lote (modo --all-stations)")
+    sp.add_argument("--sample", type=int, default=12, help="estações na amostra de validação (modo --all-stations)")
     sp.add_argument("--report", default="impute_report.md", help="nome do relatório em data/final/")
     sp.set_defaults(func=cmd_inmet_impute)
 

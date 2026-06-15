@@ -34,7 +34,7 @@ import numpy as np
 import polars as pl
 
 from src.transform.inmet import compute_itu, qc_humidity, qc_temperature
-from src.utils import final_dir, get_logger
+from src.utils import final_dir, get_logger, interim_dir
 
 log = get_logger(__name__)
 
@@ -91,18 +91,23 @@ def load_nasa_hourly(codes: list[str], nasa_path: Path | None = None) -> pl.Data
     )
 
 
-def build_frame(codes: list[str], **paths) -> pl.DataFrame:
-    """Grade NASA (completa) ⟕ INMET. `temp`/`rh` ficam null onde o INMET falta.
+def assemble_frame(nasa: pl.DataFrame, codes: list[str], history_path: Path | None = None) -> pl.DataFrame:
+    """Junta uma grade NASA já em memória com o INMET horário + mes/ano.
 
-    Colunas: cd_estacao, data, hora, mes, ano, t2m, rh2m, temp, rh.
+    Colunas: cd_estacao, data, hora, t2m, rh2m, temp, rh, mes, ano.
     """
-    nasa = load_nasa_hourly(codes, paths.get("nasa_path"))
-    inmet = load_inmet_hourly(codes, paths.get("history_path"))
+    inmet = load_inmet_hourly(codes, history_path)
     frame = nasa.join(inmet, on=["cd_estacao", "data", "hora"], how="left")
     return frame.with_columns(
         pl.col("data").str.slice(5, 2).cast(pl.Int32).alias("mes"),
         pl.col("data").str.slice(0, 4).cast(pl.Int32).alias("ano"),
     )
+
+
+def build_frame(codes: list[str], **paths) -> pl.DataFrame:
+    """Grade NASA (do parquet consolidado) ⟕ INMET. `temp`/`rh` null onde falta."""
+    nasa = load_nasa_hourly(codes, paths.get("nasa_path"))
+    return assemble_frame(nasa, codes, paths.get("history_path"))
 
 
 # ── Ajuste do viés (estação × mês) com cascata de fallback ────────────────────
@@ -192,16 +197,25 @@ def impute_hourly(frame: pl.DataFrame, method: str) -> pl.DataFrame:
 # ── Agregação diária + ITU ────────────────────────────────────────────────────
 
 
-def _origem(frac: str) -> pl.Expr:
+def _origem(obs: str, imp: str) -> pl.Expr:
+    """Origem do dia a partir das contagens de horas (null-safe)."""
+    total = pl.col(obs) + pl.col(imp)
     return (
-        pl.when(pl.col(frac) == 0).then(pl.lit("inmet"))
-        .when(pl.col(frac) >= 1).then(pl.lit("nasa"))
+        pl.when(total == 0).then(None)            # nenhum dado (nem obs nem NASA)
+        .when(pl.col(imp) == 0).then(pl.lit("inmet"))
+        .when(pl.col(obs) == 0).then(pl.lit("nasa"))
         .otherwise(pl.lit("misto"))
     )
 
 
+def _frac(obs: str, imp: str) -> pl.Expr:
+    """Fração de horas imputadas; null (não NaN) quando não há horas."""
+    total = pl.col(obs) + pl.col(imp)
+    return pl.when(total > 0).then(pl.col(imp) / total).otherwise(None)
+
+
 def aggregate_daily(hourly: pl.DataFrame, temp_col: str = "temp_imp", rh_col: str = "rh_imp") -> pl.DataFrame:
-    """Diário (temp_med/max, umid_med/min, ITU) com origem e fração imputada."""
+    """Diário (temp_med/max, umid_med/min, ITU) com origem, fração e horas observadas."""
     daily = (
         hourly.group_by(["cd_estacao", "data"]).agg(
             pl.col(temp_col).mean().alias("temp_med"),
@@ -210,29 +224,27 @@ def aggregate_daily(hourly: pl.DataFrame, temp_col: str = "temp_imp", rh_col: st
             pl.col(rh_col).min().alias("umid_min"),
             pl.len().alias("n_horas"),
             (pl.col("temp_src") == "nasa").sum().alias("_t_imp"),
-            (pl.col("temp_src") == "inmet").sum().alias("_t_obs"),
+            (pl.col("temp_src") == "inmet").sum().alias("n_temp_obs"),
             (pl.col("rh_src") == "nasa").sum().alias("_r_imp"),
-            (pl.col("rh_src") == "inmet").sum().alias("_r_obs"),
+            (pl.col("rh_src") == "inmet").sum().alias("n_umid_obs"),
         )
         .with_columns(
-            (pl.col("_t_imp") / (pl.col("_t_obs") + pl.col("_t_imp"))).alias("temp_frac_imp"),
-            (pl.col("_r_imp") / (pl.col("_r_obs") + pl.col("_r_imp"))).alias("umid_frac_imp"),
-        )
-        .with_columns(
-            _origem("temp_frac_imp").alias("temp_origem"),
-            _origem("umid_frac_imp").alias("umid_origem"),
+            _frac("n_temp_obs", "_t_imp").alias("temp_frac_imp"),
+            _frac("n_umid_obs", "_r_imp").alias("umid_frac_imp"),
+            _origem("n_temp_obs", "_t_imp").alias("temp_origem"),
+            _origem("n_umid_obs", "_r_imp").alias("umid_origem"),
             compute_itu(pl.col("temp_med"), pl.col("umid_med")).alias("itu_med"),
             compute_itu(pl.col("temp_max"), pl.col("umid_min")).alias("itu_max"),
         )
         .with_columns(((pl.col("temp_frac_imp") > 0) | (pl.col("umid_frac_imp") > 0)).alias("itu_imputado"))
         .with_columns(pl.col("data").str.strptime(pl.Date, "%Y-%m-%d", strict=False))
-        .drop(["_t_imp", "_t_obs", "_r_imp", "_r_obs"])
         .sort(["cd_estacao", "data"])
     )
     return daily.select(
         "cd_estacao", "data", "temp_med", "temp_max", "umid_med", "umid_min",
         "itu_med", "itu_max", "temp_origem", "umid_origem",
         "temp_frac_imp", "umid_frac_imp", "itu_imputado", "n_horas",
+        "n_temp_obs", "n_umid_obs",
     )
 
 
@@ -266,8 +278,13 @@ def validate(codes: list[str], test_years: list[int], method: str, **paths) -> d
 
     Retorna métricas horárias (temp/umidade) e diárias no nível do ITU, medindo
     o pior caso realista: dias totalmente observados re-imputados 100% pelo NASA.
+
+    `frame` pode ser passado pronto (ex.: grade NASA buscada on-the-fly); caso
+    contrário é lido do parquet consolidado.
     """
-    frame = build_frame(codes, **paths)
+    frame = paths.pop("frame", None)
+    if frame is None:
+        frame = build_frame(codes, **paths)
     universe = frame.select(["cd_estacao", "mes"]).unique()
     train = frame.filter(~pl.col("ano").is_in(test_years))
     test = frame.filter(pl.col("ano").is_in(test_years))
@@ -344,7 +361,7 @@ def impute_daily(
     out = output_path or (final_dir() / "inmet_historico_diario_imputado.parquet")
     frame = build_frame(codes, **paths)
     hourly = impute_hourly(frame, method)
-    daily = aggregate_daily(hourly)
+    daily = add_tipo(aggregate_daily(hourly))
     daily.write_parquet(out, compression="zstd", compression_level=3, row_group_size=100_000)
     log.info("wrote %s rows=%d (method=%s)", out, daily.height, method)
     return out, daily
@@ -359,7 +376,7 @@ def format_report(val: dict, coverage: pl.DataFrame, codes: list[str]) -> str:
     L = []
     L.append("# Relatório de imputação INMET ← NASA POWER\n")
     L.append(f"- Método de correção de viés: **{val['method']}**")
-    L.append(f"- Estações (piloto): {', '.join(codes)}")
+    L.append(f"- Estações da validação ({len(codes)}): {', '.join(codes)}")
     L.append(f"- Hold-out (anos de teste): {val['test_years']}")
     L.append("- Validação = ajusta no treino, prediz no teste; o nível ITU usa o "
              "**pior caso**: dias 100% observados re-imputados inteiramente pelo NASA.\n")
@@ -390,9 +407,22 @@ def format_report(val: dict, coverage: pl.DataFrame, codes: list[str]) -> str:
         L.append(f"| {code} | {f(t,'r2')} | {f(t,'bias')} | {f(t,'var_ratio')} | {f(r,'r2')} | {f(r,'bias')} |")
 
     L.append("\n## Cobertura (todo o período imputado)\n")
-    L.append("| estação | dias | % dias c/ temp tocada | % horas temp imp | % horas umid imp |")
+    n_est = coverage.height
+    overall = coverage.select(
+        dias=pl.col("dias").sum(),
+        ft=pl.col("frac_horas_temp_imp").mean(),
+        fr=pl.col("frac_horas_umid_imp").mean(),
+    ).row(0, named=True)
+    L.append(f"- **{n_est} estações**, {overall['dias']:,} dias-estação no total.")
+    L.append(f"- Fração média de horas imputadas: temp {overall['ft']*100:.1f}%, umidade {overall['fr']*100:.1f}%.\n")
+    shown = coverage.sort("frac_horas_temp_imp", descending=True)
+    title = "| estação | dias | % dias c/ temp tocada | % horas temp imp | % horas umid imp |"
+    if n_est > 25:
+        L.append("Estações com maior fração imputada (top 15):\n")
+        shown = shown.head(15)
+    L.append(title)
     L.append("|---|---|---|---|---|")
-    for row in coverage.iter_rows(named=True):
+    for row in shown.iter_rows(named=True):
         L.append(
             f"| {row['cd_estacao']} | {row['dias']} | "
             f"{row['frac_dias_temp_tocada']*100:.1f}% | {row['frac_horas_temp_imp']*100:.1f}% | {row['frac_horas_umid_imp']*100:.1f}% |"
@@ -407,6 +437,33 @@ def format_report(val: dict, coverage: pl.DataFrame, codes: list[str]) -> str:
     return "\n".join(L) + "\n"
 
 
+def add_tipo(daily: pl.DataFrame) -> pl.DataFrame:
+    """Rotula cada dia-estação em `tipo`: observado / gap-fill / backfill.
+
+    - `observado`: o dia tem ao menos uma hora real do INMET (origem inmet/misto).
+    - `gap-fill`: dia 100% imputado DENTRO do período operacional (lacuna real).
+    - `backfill`: dia 100% imputado ANTES da 1ª observação da estação — anos em
+      que ela ainda não existia (climatologia do ponto, não dado de estação).
+
+    Precisa da série completa por estação (chamar após o concat, não por lote).
+    """
+    t0 = (
+        daily.filter(pl.col("temp_origem") != "nasa")
+        .group_by("cd_estacao")
+        .agg(pl.col("data").min().alias("_t0"))
+    )
+    return (
+        daily.join(t0, on="cd_estacao", how="left")
+        .with_columns(
+            pl.when(pl.col("temp_origem") != "nasa").then(pl.lit("observado"))
+            .when(pl.col("_t0").is_null() | (pl.col("data") < pl.col("_t0"))).then(pl.lit("backfill"))
+            .otherwise(pl.lit("gap-fill"))
+            .alias("tipo")
+        )
+        .drop("_t0")
+    )
+
+
 def coverage_summary(daily: pl.DataFrame) -> pl.DataFrame:
     """Resumo de cobertura por estação: dias e fração imputada."""
     return (
@@ -414,8 +471,157 @@ def coverage_summary(daily: pl.DataFrame) -> pl.DataFrame:
         .agg(
             pl.len().alias("dias"),
             (pl.col("temp_origem") != "inmet").mean().alias("frac_dias_temp_tocada"),
-            pl.col("temp_frac_imp").mean().alias("frac_horas_temp_imp"),
-            pl.col("umid_frac_imp").mean().alias("frac_horas_umid_imp"),
+            pl.col("temp_frac_imp").drop_nulls().mean().alias("frac_horas_temp_imp"),
+            pl.col("umid_frac_imp").drop_nulls().mean().alias("frac_horas_umid_imp"),
         )
         .sort("cd_estacao")
     )
+
+
+# ── Escala completa: busca NASA on-the-fly, por lotes, retomável ──────────────
+
+
+def station_coords(codes: list[str] | None = None, estacoes_path: Path | None = None) -> pl.DataFrame:
+    """(cd_estacao, vl_latitude, vl_longitude) de estacoes.parquet, sem nulos."""
+    src = estacoes_path or (final_dir() / "estacoes.parquet")
+    e = pl.read_parquet(src, columns=["cd_estacao", "vl_latitude", "vl_longitude"]).drop_nulls().unique("cd_estacao")
+    if codes:
+        e = e.filter(pl.col("cd_estacao").is_in(codes))
+    return e.sort("cd_estacao")
+
+
+def _year_chunks(years: tuple[int, int], size: int) -> list[tuple[str, str]]:
+    yrs = list(range(years[0], years[1] + 1))
+    return [(f"{yrs[i]}-01-01", f"{yrs[min(i + size - 1, len(yrs) - 1)]}-12-31") for i in range(0, len(yrs), size)]
+
+
+def fetch_nasa_frame(
+    coords: pl.DataFrame,
+    years: tuple[int, int] = (2001, 2024),
+    chunk_years: int = 10,
+    sleep: float = 0.2,
+    parameters: tuple[str, ...] = ("T2M", "RH2M"),
+) -> pl.DataFrame:
+    """Busca a grade horária do NASA POWER para as estações de `coords` (cacheado).
+
+    Mantém só as estações pedidas em memória — seguro para lotes. Falhas de rede
+    por estação são logadas e puladas (não derrubam o lote).
+    """
+    import time
+
+    from src.collect.nasa_power import fetch_point_hourly
+    from src.transform.nasa_power import parse_point_hourly
+
+    chunks = _year_chunks(years, chunk_years)
+    frames: list[pl.DataFrame] = []
+    for row in coords.iter_rows(named=True):
+        code, lat, lon = row["cd_estacao"], row["vl_latitude"], row["vl_longitude"]
+        for c_start, c_end in chunks:
+            try:
+                payload = fetch_point_hourly(lat, lon, c_start, c_end, parameters)
+                frames.append(parse_point_hourly(payload, cd_estacao=code))
+            except Exception as exc:  # rede/HTTP — pula a estação/chunk
+                log.warning("nasa fetch falhou %s %s..%s: %s", code, c_start, c_end, exc)
+            time.sleep(sleep)
+    if not frames:
+        return pl.DataFrame()
+    return pl.concat(frames, how="vertical_relaxed").select("cd_estacao", "data", "hora", "t2m", "rh2m")
+
+
+def impute_all(
+    method: str = "scaling",
+    years: tuple[int, int] = (2001, 2024),
+    batch_size: int = 20,
+    codes: list[str] | None = None,
+    output_path: Path | None = None,
+    staging_dir: Path | None = None,
+    **paths,
+) -> tuple[Path, pl.DataFrame]:
+    """Imputa TODAS as estações em lotes (RAM-safe) e retomável.
+
+    Cada lote: busca NASA on-the-fly (cache) → join INMET → imputa → agrega →
+    grava `staging/batch_NNNN.parquet`. Lotes já gravados são pulados. No fim,
+    concatena tudo em `inmet_historico_diario_imputado.parquet`. Só o diário
+    (pequeno) é mantido entre lotes — o horário (~10⁸ linhas) nunca é materializado.
+    """
+    coords = station_coords(codes, paths.get("estacoes_path"))
+    all_codes = coords["cd_estacao"].to_list()
+    staging = staging_dir or interim_dir("impute_batches")
+    staging.mkdir(parents=True, exist_ok=True)
+    batches = [all_codes[i : i + batch_size] for i in range(0, len(all_codes), batch_size)]
+    log.info("impute_all: %d estações em %d lotes de %d (método=%s)", len(all_codes), len(batches), batch_size, method)
+
+    def _write(df: pl.DataFrame, path: Path) -> None:
+        df.write_parquet(path, compression="zstd", compression_level=3, row_group_size=100_000)
+
+    for bi, batch in enumerate(batches):
+        done = staging / f"batch_{bi:04d}.parquet"          # lote COMPLETO (pula no rerun)
+        partial = staging / f"batch_{bi:04d}.partial.parquet"  # incompleto → re-tenta
+        if done.exists():
+            continue
+        nasa = fetch_nasa_frame(coords.filter(pl.col("cd_estacao").is_in(batch)), years)
+        if nasa.height == 0:
+            log.warning("lote %d/%d sem dados NASA, será re-tentado", bi + 1, len(batches))
+            continue
+        daily = aggregate_daily(impute_hourly(assemble_frame(nasa, batch, paths.get("history_path")), method))
+        missing = sorted(set(batch) - set(daily["cd_estacao"].unique().to_list()))
+        if missing:
+            # Não marca como completo: falha (transitória?) seria cravada no rerun.
+            _write(daily, partial)
+            log.warning("lote %d/%d incompleto: faltam %s (gravado .partial)", bi + 1, len(batches), missing)
+        else:
+            _write(daily, done)
+            partial.unlink(missing_ok=True)
+            log.info("lote %d/%d ok: %d estações, %d dias", bi + 1, len(batches), len(batch), daily.height)
+
+    # Concatena: prefere o lote completo; cai pro .partial quando só ele existir.
+    parts: list[Path] = []
+    for bi in range(len(batches)):
+        done = staging / f"batch_{bi:04d}.parquet"
+        partial = staging / f"batch_{bi:04d}.partial.parquet"
+        parts.append(done if done.exists() else partial)
+    parts = [p for p in parts if p.exists()]
+    full = pl.concat([pl.read_parquet(p) for p in parts])
+
+    # Mantém só estações que REALMENTE observaram algo no período. Estações sem
+    # nenhuma hora observada (ex.: começaram a operar depois de `years`) seriam
+    # 100% sintéticas — não é gap-filling, é fabricação; ficam de fora.
+    have_data = (
+        full.group_by("cd_estacao")
+        .agg((pl.col("n_temp_obs").sum() + pl.col("n_umid_obs").sum()).alias("obs"))
+        .filter(pl.col("obs") > 0)["cd_estacao"]
+        .to_list()
+    )
+    n_drop = full["cd_estacao"].n_unique() - len(have_data)
+    if n_drop:
+        log.info("descartando %d estações sem dado observável em %s", n_drop, years)
+    full = add_tipo(full.filter(pl.col("cd_estacao").is_in(have_data))).sort(["cd_estacao", "data"])
+
+    out = output_path or (final_dir() / "inmet_historico_diario_imputado.parquet")
+    _write(full, out)
+
+    no_data = sorted(set(all_codes) - set(have_data))
+    log.info("wrote %s rows=%d estações=%d/%d (%d sem dado no período)",
+             out, full.height, len(have_data), len(all_codes), len(no_data))
+    return out, full
+
+
+def validate_sample(
+    codes: list[str],
+    test_years: list[int],
+    method: str,
+    years: tuple[int, int] = (2001, 2024),
+    **paths,
+) -> dict:
+    """Validação hold-out numa amostra, buscando o NASA on-the-fly (escala completa)."""
+    nasa = fetch_nasa_frame(station_coords(codes, paths.get("estacoes_path")), years)
+    frame = assemble_frame(nasa, codes, paths.get("history_path"))
+    return validate(codes, test_years, method, frame=frame)
+
+
+def sample_codes(all_codes: list[str], n: int) -> list[str]:
+    """Amostra determinística por passo (espalha pela lista ordenada)."""
+    if len(all_codes) <= n:
+        return all_codes
+    step = len(all_codes) / n
+    return [all_codes[int(i * step)] for i in range(n)]
